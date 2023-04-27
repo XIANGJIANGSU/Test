@@ -1,0 +1,481 @@
+/*-----------------------------------------------------------
+**
+** 版权: 中国航空无线电电子研究所, 2015年
+**
+** 文件名: PARTICLES.c
+**
+** 描述: 本文件包含粒子效果的函数。
+**
+** 定义的函数:  
+**
+**                            
+** 设计注记: 
+**
+** 作者：
+**		LPF。
+** 
+**
+** 更改历史:
+**		2016-9-26 9:34 LPF 创建此文件
+**
+**
+**-----------------------------------------------------------
+*/
+/*-----------------------------------------------------------
+** 头文件引用
+**-----------------------------------------------------------
+*/
+#ifdef WIN32
+#include <windows.h>
+#endif
+
+#include <stdlib.h>
+#include <stdio.h>
+//#include "../tile/SphereTile.h"
+//#include "../math/GeoBasetype.h"
+#include "../render/SphereRender.h"
+#include <assert.h>
+#include <string.h>
+#include "AirFeatureLayer.h"
+#include "../tools3d/ConvertEddian.h"
+#include "../memory/MemoryPool.h"
+#include "../tools3d/List.h"
+#include "../texture/Texture.h"
+#include "Model.h"
+#include "../vecMapEngine_prj/tools/readTxtFile.h"
+#include "whitecity.h"
+#include "loadmodel.h"
+#include "../../vecMapEngine_prj/define/macroDefine.h"
+
+/*-----------------------------------------------------------
+** 类型声明
+**-----------------------------------------------------------
+*/
+typedef struct tagparticles						// Create A Structure For Particle
+{
+	BOOL active;					// Active (Yes/No)
+	float	life;					// Particle Life
+	float	fade;					// Fade Speed
+	float	r;						// Red Value
+	float	g;						// Green Value
+	float	b;						// Blue Value
+	float	x;						// X Position
+	float	y;						// Y Position
+	float	z;						// Z Position
+	float	xi;						// X Direction
+	float	yi;						// Y Direction
+	float	zi;						// Z Direction
+	float	xg;						// X Gravity
+	float	yg;						// Y Gravity
+	float	zg;						// Z Gravity
+}ParticlesEx;							// Particles Structure
+
+
+/*-----------------------------------------------------------
+** 文字量和宏声明
+**-----------------------------------------------------------
+*/
+//图片存储路径
+#ifdef WIN32
+#define ParticlesPath "D:/ScoperData/DataFile/model/particle/Particle.bmp"
+#else
+#define ParticlesPath "/ahci00/mapData3d/DataFile/model/particle/Particle.bmp"
+#endif
+
+#define		MAX_PARTICLES	1000		// Number Of Particles To Create
+/*-----------------------------------------------------------
+** 全局变量定义
+**-----------------------------------------------------------
+*/
+static float	slowdown=2.0f;				// Slow Down Particles
+static float	xspeed;						// Base X Speed (To Allow Keyboard Direction Of Tail)
+static float	yspeed;						// Base Y Speed (To Allow Keyboard Direction Of Tail)
+static float	zoom=0.0f;	//-40.0f;					// Used To Zoom Out
+
+static GLuint	loop;						// Misc Loop Variable
+static GLuint	col;						// Current Color Selection
+static GLuint	delay;						// Rainbow Effect Delay
+static GLuint	particletexture[1] = {0};					// Storage For Our Particle Texture
+
+static ParticlesEx particle[MAX_PARTICLES] = {0};	// Particle Array (Room For Particle Info)
+
+static GLfloat colors[12][3]=		// Rainbow Of Colors
+{
+	{1.0f,0.5f,0.5f},{1.0f,0.75f,0.5f},{1.0f,1.0f,0.5f},{0.75f,1.0f,0.5f},
+	{0.5f,1.0f,0.5f},{0.5f,1.0f,0.75f},{0.5f,1.0f,1.0f},{0.5f,0.75f,1.0f},
+	{0.5f,0.5f,1.0f},{0.75f,0.5f,1.0f},{1.0f,0.5f,1.0f},{1.0f,0.5f,0.75f}
+};
+
+static BOOL InitParticlesOr = FALSE;	//是否完成粒子效果初始化
+
+/*-----------------------------------------------------------
+** 外部变量声明
+**-----------------------------------------------------------
+*/
+
+/*-----------------------------------------------------------
+** 内部函数声明
+**-----------------------------------------------------------
+*/
+int LoadParticlesTexture(const f_char_t* filepath, f_uint32_t* textureID);
+int DrawParticles(GLvoid);	
+int InitParticles(GLvoid);	
+/*-----------------------------------------------------------
+** 函数定义
+**-----------------------------------------------------------
+*/
+
+#if 0
+/*.BH--------------------------------------------------------
+**
+** 函数名: RenderParticlesDynamic
+**
+** 描述:  绘制粒子效果函数1
+**
+** 输入参数:  模型size, lat , lon, hei, yaw, pitch, roll, scale
+**				显示效果:	0,1,2...
+**
+** 输出参数：无
+**
+** 返回值：TRUE 成功or FALSE 失败
+**          
+**
+** 设计注记:  外部接口1, 第一层函数
+**
+**.EH--------------------------------------------------------
+*/
+
+BOOL RenderParticlesDynamic(int size, double lat, double lon, double hei, double yaw, double pitch, double roll, double scale, int DisplayType)
+{
+	f_float64_t radius = 10;
+	f_float64_t dis = 0;
+	f_float64_t z0 = 0;              //地面高度
+	LPModel3DS p3DModel = {0};	
+	f_float64_t * ModelX = malloc(sizeof(f_float64_t));
+	f_float64_t * ModelY = malloc(sizeof(f_float64_t));
+	f_float64_t * ModelZ = malloc(sizeof(f_float64_t));
+	PT_4D color = {0};
+
+	//判断是否绘制
+	if(CheckModelRender() == FALSE)  
+	{return FALSE;}
+
+	// 判断是否完成初始化	
+	if(InitParticlesOr == FALSE)
+	{
+		InitParticles();
+		return FALSE;
+	}
+
+	//判断是否在视景体内
+	//测量当地高度
+	if(FALSE == GetZ((lon),(lat),&z0))
+	{
+		z0 = EARTH_RADIUS;
+	}
+		//return FALSE;
+	SphereToXYZ(DEGREE_TO_RADIAN(lon),
+				 DEGREE_TO_RADIAN(lat),
+				 z0+hei,
+				 ModelX, ModelY, ModelZ, EARTH_RADIUS);						
+	radius = (scale) * (size);
+	if(InFrustum(*ModelX, *ModelY, *ModelZ, radius, GetFrustumModel(), &dis) == FALSE)
+	{return FALSE;}
+
+	//绘制模型
+	//type + 6,目的是绘制粒子效果，不绘制模型
+	RenderModelLLH( p3DModel, 0, TRUE,
+								DEGREE_TO_RADIAN(lon),
+								DEGREE_TO_RADIAN(lat), 
+								hei+z0, pitch, yaw, roll, scale,6+DisplayType,FALSE,color);   //目前是地面高度+相对高度        
+
+	printf("绘制粒子效果%d\n");
+
+	free(ModelX);
+	free(ModelY);
+	free(ModelZ);
+	
+	return TRUE;
+}
+#endif
+/*.BH--------------------------------------------------------
+**
+** 函数名: RenderParticleType
+**
+** 描述:  绘制粒子效果函数1
+**
+** 输入参数:  无
+**
+** 输出参数：无
+**
+** 返回值：TRUE 成功or FALSE 失败
+**          
+**
+** 设计注记:  外部接口2
+**
+**.EH--------------------------------------------------------
+*/
+int RenderParticleType(int DisplayType)
+{
+
+	// 判断是否完成初始化	
+	if(InitParticlesOr == FALSE)
+	{
+		InitParticles();
+		return FALSE;
+	}
+	
+	switch(DisplayType)
+	{
+		case 0:
+			DrawParticles();
+			break;
+
+		default:
+			DrawParticles();
+			break;
+	}
+
+	return TRUE;
+
+		
+}
+/*.BH--------------------------------------------------------
+**
+** 函数名: DrawParticles
+**
+** 描述:  绘制粒子效果函数1
+**
+** 输入参数:  无
+**
+** 输出参数：无
+**
+** 返回值：TRUE 成功or FALSE 失败
+**          
+**
+** 设计注记:  内部接口1, 第二层函数
+**
+**.EH--------------------------------------------------------
+*/
+int DrawParticles(GLvoid)										// Here's Where We Do All The Drawing
+{
+//	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);		// Clear Screen And Depth Buffer
+//	glLoadIdentity();										// Reset The ModelView Matrix
+//	glShadeModel(GL_SMOOTH);							// Enable Smooth Shading
+//	glClearColor(0.0f,0.0f,0.0f,0.0f);					// Black Background
+//	glClearDepth(1.0f);									// Depth Buffer Setup
+	glPushAttrib(GL_CURRENT_BIT);									/**< 保存现有颜色属实性 */
+	glDisable(GL_DEPTH_TEST);							// Disable Depth Testing
+	glEnable(GL_BLEND);									// Enable Blending
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE);					// Type Of Blending To Perform
+	glHint(GL_PERSPECTIVE_CORRECTION_HINT,GL_NICEST);	// Really Nice Perspective Calculations
+	glHint(GL_POINT_SMOOTH_HINT,GL_NICEST);				// Really Nice Point Smoothing
+	glBindTexture(GL_TEXTURE_2D,particletexture[0]);			// Select Our Texture
+
+	for (loop=0;loop<MAX_PARTICLES;loop++)					// Loop Through All The Particles
+	{
+		if (particle[loop].active == TRUE)							// If The Particle Is Active
+		{
+			float x=particle[loop].x * 1;						// Grab Our Particle X Position
+			float y=particle[loop].y * 1;						// Grab Our Particle Y Position
+			float z=(particle[loop].z+zoom)*1;					// Particle Z Pos + Zoom
+			float part = 0.5f *1;
+			//printf("%f--%f--%f\n",x,y,z);
+			// Draw The Particle Using Our RGB Values, Fade The Particle Based On It's Life
+			glColor4f(particle[loop].r,particle[loop].g,particle[loop].b,particle[loop].life);
+			//printf("r,g,b = %f,%f,%f\n",particle[loop].r,particle[loop].g,particle[loop].b);
+			
+			glBegin(GL_TRIANGLE_STRIP);						// Build Quad From A Triangle Strip
+			    	glTexCoord2d(1,1); glVertex3f(x+part,y+part,z); // Top Right
+				glTexCoord2d(0,1); glVertex3f(x-part,y+part,z); // Top Left
+				glTexCoord2d(1,0); glVertex3f(x+part,y-part,z); // Bottom Right
+				glTexCoord2d(0,0); glVertex3f(x-part,y-part,z); // Bottom Left
+			glEnd();										// Done Building Triangle Strip
+
+			particle[loop].x+=particle[loop].xi/(slowdown*1000);// Move On The X Axis By X Speed
+			particle[loop].y+=particle[loop].yi/(slowdown*1000);// Move On The Y Axis By Y Speed
+			particle[loop].z+=particle[loop].zi/(slowdown*1000);// Move On The Z Axis By Z Speed
+
+			particle[loop].xi+=particle[loop].xg;			// Take Pull On X Axis Into Account
+			particle[loop].yi+=particle[loop].yg;			// Take Pull On Y Axis Into Account
+			particle[loop].zi+=particle[loop].zg;			// Take Pull On Z Axis Into Account
+			particle[loop].life-=particle[loop].fade;		// Reduce Particles Life By 'Fade'
+
+			if (particle[loop].life<0.0f)					// If Particle Is Burned Out
+			{
+				particle[loop].life=1.0f;					// Give It New Life
+				particle[loop].fade=(rand()%100)/1000.0f+0.003f;	// Random Fade Value
+				particle[loop].x=0.0f;						// Center On X Axis
+				particle[loop].y=0.0f;						// Center On Y Axis
+				particle[loop].z=0.0f;						// Center On Z Axis
+				particle[loop].xi=xspeed+((rand()%60)-32.0f);	// X Axis Speed And Direction
+				particle[loop].yi=yspeed+((rand()%60)-30.0f);	// Y Axis Speed And Direction
+				particle[loop].zi=((rand()%60)-30.0f);	// Z Axis Speed And Direction
+				particle[loop].r=colors[col][0];			// Select Red From Color Table
+				particle[loop].g=colors[col][1];			// Select Green From Color Table
+				particle[loop].b=colors[col][2];			// Select Blue From Color Table
+			}
+
+		}
+    }
+
+	glEnable(GL_DEPTH_TEST);							// Disable Depth Testing
+	glDisable(GL_BLEND);									// Enable Blending
+	glPopAttrib();   /**< 恢复前一属性 */
+
+	//变量递增
+	if(delay>5)	// Space Or Rainbow Mode
+	{
+		delay=0;						// Reset The Rainbow Color Cycling Delay
+		col++;							// Change The Particle Color
+		if (col>11)	
+		{	col=0;}				// If Color Is To High Reset It
+	}
+	delay++;							// Increase Rainbow Mode Color Cycling Delay Counter
+	
+	glBindTexture(GL_TEXTURE_2D,0);		//lpf add for 不影响后面的模型绘制效果
+	return TRUE;											// Everything Went OK
+}
+
+/*.BH--------------------------------------------------------
+**
+** 函数名: InitParticles
+**
+** 描述:  初始化粒子效果函数1
+**
+** 输入参数:  无
+**
+** 输出参数：无
+**
+** 返回值：TRUE 成功or FALSE 失败
+**          
+**
+** 设计注记: 内部接口2，第三层函数
+**
+**.EH--------------------------------------------------------
+*/
+int InitParticles(GLvoid)										// All Setup For OpenGL Goes Here
+{
+	int i,j;
+
+	//突出多彩的效果
+	for(i=0;i<12;i++)
+	{
+		for(j=0;j<3;j++)
+			colors[i][j] *= 0.3;
+	}
+
+	if (FALSE ==  LoadParticlesTexture(ParticlesPath, &particletexture[0]))								// Jump To Texture Loading Routine
+	{
+		return FALSE;									// If Texture Didn't Load Return FALSE
+	}
+
+	for (loop=0;loop<MAX_PARTICLES;loop++)				// Initials All The Textures
+	{
+		particle[loop].active=TRUE;								// Make All The Particles Active
+		particle[loop].life=1.0f;								// Give All The Particles Full Life
+		particle[loop].fade=(rand()%100)/1000.0f+0.003f;	// Random Fade Speed
+		particle[loop].r=colors[loop*(12/MAX_PARTICLES)][0];	// Select Red Rainbow Color
+		particle[loop].g=colors[loop*(12/MAX_PARTICLES)][1];	// Select Red Rainbow Color
+		particle[loop].b=colors[loop*(12/MAX_PARTICLES)][2];	// Select Red Rainbow Color
+		particle[loop].xi=((rand()%50)-26.0f)*10.0f;		// Random Speed On X Axis
+		particle[loop].yi=((rand()%50)-25.0f)*10.0f;		// Random Speed On Y Axis
+		particle[loop].zi=((rand()%50)-25.0f)*10.0f;		// Random Speed On Z Axis
+		particle[loop].xg=0.0f;									// Set Horizontal Pull To Zero
+		particle[loop].yg=-0.8f;								// Set Vertical Pull Downward
+		particle[loop].zg=0.0f;									// Set Pull On Z Axis To Zero
+	}
+
+	InitParticlesOr = TRUE;
+	return TRUE;										// Initialization Went OK
+}
+
+/*.BH--------------------------------------------------------
+**
+** 函数名: LoadParticlesTexture
+**
+** 描述:  载入粒子效果瓦片
+**
+** 输入参数:  无
+**
+** 输出参数：无
+**
+** 返回值：TRUE 成功or FALSE 失败
+**          
+**
+** 设计注记:  内部函数3
+**
+**.EH--------------------------------------------------------
+*/
+int LoadParticlesTexture(const f_char_t* filepath, f_uint32_t* textureID)
+{
+	f_uint16_t width, height;
+	f_uint32_t size;
+	f_uint8_t style; 
+	f_uint8_t* pImageData = NULL;
+/*	f_char_t file_path[1024] = {0};*/
+	f_uint32_t textureid = 0;
+
+	if(!filepath)
+		return FALSE;
+	
+	pImageData = ReadBMPEX(filepath, &width, &height, &size, &style);
+
+	if(pImageData == NULL)
+	{
+		printf("建筑模型-%s:载入位图失败!\n", filepath);
+		return FALSE;
+	}
+	glGenTextures(1, &textureid);
+
+	glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
+	glBindTexture(GL_TEXTURE_2D, textureid);
+
+	/** 控制滤波 */
+//	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
+//	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+
+	/** 创建纹理 */
+//	if (style == IMAGE_RGB)
+//	{
+//		gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, width, height, GL_RGB, 
+//			GL_UNSIGNED_BYTE, pImageData);
+//
+//	}
+//	else
+//	{
+//		gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, width, height, GL_RGBA, 
+//			GL_UNSIGNED_BYTE, pImageData);	
+//	}
+	if (style == IMAGE_RGB)
+	{
+//		gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, width, height, GL_RGB, 
+//			GL_UNSIGNED_BYTE, pImageData);
+		
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, pImageData);
+
+	}
+	else
+	{
+//		gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, width, height, GL_RGBA, 
+//			GL_UNSIGNED_BYTE, pImageData);	
+		
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pImageData);
+	}
+
+	
+	
+	
+	
+	
+	
+	DeleteAlterableMemory(pImageData);
+	*textureID = textureid;
+
+	return TRUE;
+}
+
+
+
